@@ -1,0 +1,126 @@
+package server
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/logpipe/logpipe/internal/protocol"
+)
+
+type Collector struct {
+	listener net.Listener
+	storage  *Storage
+	port     int
+
+	wg       sync.WaitGroup
+	shutdown chan struct{}
+}
+
+func NewCollector(port int, storage *Storage) *Collector {
+	return &Collector{
+		port:     port,
+		storage:  storage,
+		shutdown: make(chan struct{}),
+	}
+}
+
+func (c *Collector) Start() error {
+	addr := fmt.Sprintf(":%d", c.port)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to start TCP listener: %w", err)
+	}
+	c.listener = listener
+
+	go c.acceptLoop()
+	return nil
+}
+
+func (c *Collector) acceptLoop() {
+	for {
+		conn, err := c.listener.Accept()
+		if err != nil {
+			select {
+			case <-c.shutdown:
+				return
+			default:
+				log.Printf("Accept error: %v", err)
+				continue
+			}
+		}
+
+		c.wg.Add(1)
+		go c.handleConn(conn)
+	}
+}
+
+func (c *Collector) handleConn(conn net.Conn) {
+	defer c.wg.Done()
+	defer conn.Close()
+
+	remoteAddr := conn.RemoteAddr().String()
+	log.Printf("New connection from %s", remoteAddr)
+
+	scanner := bufio.NewScanner(conn)
+	// Increase buffer size for large log messages
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
+	for scanner.Scan() {
+		select {
+		case <-c.shutdown:
+			return
+		default:
+		}
+
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var entry protocol.LogEntry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			log.Printf("Invalid JSON from %s: %v", remoteAddr, err)
+			continue
+		}
+
+		// Set timestamp if not provided
+		if entry.Timestamp.IsZero() {
+			entry.Timestamp = time.Now()
+		}
+
+		// Validate required fields
+		if entry.Namespace == "" {
+			entry.Namespace = "default"
+		}
+		if entry.Service == "" {
+			entry.Service = "unknown"
+		}
+		if entry.Level == "" {
+			entry.Level = protocol.LevelInfo
+		}
+
+		if err := c.storage.Insert(entry); err != nil {
+			log.Printf("Failed to store log: %v", err)
+		}
+	}
+
+	if err := scanner.Err(); err != nil && err != io.EOF {
+		log.Printf("Scanner error from %s: %v", remoteAddr, err)
+	}
+
+	log.Printf("Connection closed: %s", remoteAddr)
+}
+
+func (c *Collector) Stop() {
+	close(c.shutdown)
+	if c.listener != nil {
+		c.listener.Close()
+	}
+	c.wg.Wait()
+}

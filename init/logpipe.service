@@ -1,0 +1,33 @@
+[Unit]
+Description=Logpipe Log Collection Server
+Documentation=https://github.com/logpipe/logpipe
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/logpipe server
+Restart=always
+RestartSec=5
+
+# Run as user (for user-level service)
+# For system-level, remove User/Group and adjust paths
+User=%i
+Group=%i
+
+# Environment
+Environment=HOME=%h
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=logpipe
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.logpipe
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target
