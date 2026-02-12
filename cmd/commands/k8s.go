@@ -2,13 +2,12 @@ package commands
 
 import (
 	"fmt"
-	"io"
-	"log"
 	"os"
 	"time"
 
 	"github.com/logpipe/logpipe/internal/config"
 	"github.com/logpipe/logpipe/internal/k8s"
+	"github.com/logpipe/logpipe/internal/logger"
 	"github.com/logpipe/logpipe/internal/server"
 	"github.com/logpipe/logpipe/internal/tui"
 	"github.com/spf13/cobra"
@@ -139,11 +138,14 @@ func runK8s(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 	fmt.Println("Launching TUI... (press q to quit)")
 
-	// Disable logging before TUI starts (would interfere with display)
-	log.SetOutput(io.Discard)
+	logger.Info("entering TUI mode")
 
 	// Run TUI (blocking) - cleanup happens after TUI exits
 	err = tui.Run()
+
+	if err != nil {
+		logger.Error("TUI error", "error", err)
+	}
 
 	// Cleanup
 	k8sCollector.Stop()

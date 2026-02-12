@@ -2,8 +2,9 @@ package server
 
 import (
 	"fmt"
-	"log"
 	"time"
+
+	"github.com/logpipe/logpipe/internal/logger"
 )
 
 type Config struct {
@@ -45,14 +46,14 @@ func (s *Server) Run() error {
 	if err := s.collector.Start(); err != nil {
 		return fmt.Errorf("failed to start collector: %w", err)
 	}
-	log.Printf("TCP collector listening on :%d", s.config.TCPPort)
+	logger.Info("TCP collector started", "port", s.config.TCPPort)
 
 	// Start Unix socket API
 	if err := s.api.Start(); err != nil {
 		s.collector.Stop()
 		return fmt.Errorf("failed to start API: %w", err)
 	}
-	log.Printf("Unix socket API at %s", s.api.SocketPath())
+	logger.Info("Unix socket API started", "path", s.api.SocketPath())
 
 	// Start cleanup routine
 	go s.cleanupLoop()
@@ -63,6 +64,8 @@ func (s *Server) Run() error {
 }
 
 func (s *Server) cleanupLoop() {
+	defer logger.RecoverAndLog("server.cleanupLoop")
+
 	retention := parseRetention(s.config.Retention)
 
 	// Calculate interval
@@ -90,17 +93,19 @@ func (s *Server) cleanupLoop() {
 func (s *Server) runCleanup(retention time.Duration) {
 	deleted, err := s.storage.Cleanup(retention)
 	if err != nil {
-		log.Printf("Cleanup error: %v", err)
+		logger.Error("cleanup failed", "error", err)
 	} else if deleted > 0 {
-		log.Printf("Cleanup: deleted %d old logs (retention: %s)", deleted, s.config.Retention)
+		logger.Info("cleanup completed", "deleted", deleted, "retention", s.config.Retention)
 	}
 }
 
 func (s *Server) Shutdown() {
+	logger.Info("server shutting down")
 	close(s.shutdown)
 	s.collector.Stop()
 	s.api.Stop()
 	s.storage.Close()
+	logger.Info("server shutdown complete")
 }
 
 // Storage returns the server's storage for direct access.

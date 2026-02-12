@@ -26,18 +26,17 @@
 - **Offline capable** — view previously collected logs without cluster access
 
 ## Installation
-
 ### Download binary
 
 ```bash
 # macOS Apple Silicon
-curl -L https://github.com/YOUR_USER/logpipe/releases/latest/download/logpipe-darwin-arm64 -o logpipe
+curl -L https://github.com/fenrisis/logpipe/releases/latest/download/logpipe-darwin-arm64 -o logpipe
 
 # macOS Intel
-curl -L https://github.com/YOUR_USER/logpipe/releases/latest/download/logpipe-darwin-amd64 -o logpipe
+curl -L https://github.com/fenrisis/logpipe/releases/latest/download/logpipe-darwin-amd64 -o logpipe
 
 # Linux
-curl -L https://github.com/YOUR_USER/logpipe/releases/latest/download/logpipe-linux-amd64 -o logpipe
+curl -L https://github.com/fenrisis/logpipe/releases/latest/download/logpipe-linux-amd64 -o logpipe
 
 chmod +x logpipe
 ./logpipe k8s -n your-namespace
@@ -46,7 +45,7 @@ chmod +x logpipe
 ### Build from source
 
 ```bash
-git clone https://github.com/YOUR_USER/logpipe.git
+git clone https://github.com/fenrisis/logpipe.git
 cd logpipe
 make build
 ./bin/logpipe k8s -n your-namespace
@@ -79,10 +78,28 @@ logpipe k8s -n payments --list
 | `Tab` | Switch panel (namespaces ↔ logs) |
 | `Enter` | Expand namespace / View log detail |
 | `/` | Search logs |
-| `e` | Toggle errors only |
+| `e` | Toggle ERROR filter |
+| `w` | Toggle WARN filter |
+| `i` | Toggle INFO filter |
+| `d` | Toggle DEBUG filter |
 | `f` | Toggle follow mode |
-| `c` | Clear filters |
+| `c` | Clear all filters |
 | `q` | Quit |
+
+### Verbose Mode & Internal Logs
+
+Logpipe writes internal logs to `~/.logpipe/logpipe.log` for debugging crashes and issues.
+
+```bash
+# Enable verbose (DEBUG level) logging
+logpipe k8s -n  dsnamspace -v
+logpipe server --verbose
+
+# View internal logs
+tail -f ~/.logpipe/logpipe.log
+```
+
+Log file rotates automatically at 10MB (keeps one backup as `.log.1`).
 
 ## Configuration
 

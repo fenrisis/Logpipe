@@ -4,13 +4,13 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"log"
 	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/logpipe/logpipe/internal/logger"
 	"github.com/logpipe/logpipe/internal/protocol"
 	"github.com/logpipe/logpipe/internal/server"
 )
@@ -55,7 +55,7 @@ func (c *Collector) Start() error {
 	for _, ns := range c.namespaces {
 		pods, err := c.getPods(ns)
 		if err != nil {
-			log.Printf("Warning: failed to get pods in %s: %v", ns, err)
+			logger.Warn("failed to get pods", "namespace", ns, "error", err)
 			continue
 		}
 
@@ -151,6 +151,121 @@ func (c *Collector) getPods(namespace string) ([]Pod, error) {
 	return pods, nil
 }
 
+// logBuffer accumulates multiline logs (stack traces) before storing
+type logBuffer struct {
+	entry     *protocol.LogEntry
+	pod       Pod
+	timer     *time.Timer
+	mu        sync.Mutex
+	storage   *server.Storage
+	flushTime time.Duration
+}
+
+func newLogBuffer(storage *server.Storage, pod Pod, flushTime time.Duration) *logBuffer {
+	return &logBuffer{
+		storage:   storage,
+		pod:       pod,
+		flushTime: flushTime,
+	}
+}
+
+func (b *logBuffer) hasEntry() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.entry != nil
+}
+
+func (b *logBuffer) start(line string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	extraJSON, _ := json.Marshal(map[string]interface{}{"pod": b.pod.Name})
+	b.entry = &protocol.LogEntry{
+		Timestamp: time.Now(),
+		Namespace: b.pod.Namespace,
+		Service:   b.pod.Service,
+		Level:     parseLogLevel(line),
+		Message:   line,
+		Extra:     extraJSON,
+	}
+}
+
+func (b *logBuffer) append(line string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.entry != nil {
+		b.entry.Message += "\n" + line
+		// Upgrade level if continuation contains error indicators
+		if b.entry.Level != protocol.LevelError {
+			lineLevel := parseLogLevel(line)
+			if lineLevel == protocol.LevelError {
+				b.entry.Level = protocol.LevelError
+			}
+		}
+	}
+}
+
+func (b *logBuffer) flush() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.timer != nil {
+		b.timer.Stop()
+		b.timer = nil
+	}
+
+	if b.entry != nil {
+		if err := b.storage.Insert(*b.entry); err != nil {
+			logger.Error("failed to store log", "error", err)
+		}
+		b.entry = nil
+	}
+}
+
+func (b *logBuffer) resetTimer() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.timer != nil {
+		b.timer.Stop()
+	}
+	b.timer = time.AfterFunc(b.flushTime, func() {
+		b.flush()
+	})
+}
+
+// isContinuation detects if a line is a continuation of a multiline log (stack trace)
+func isContinuation(line string) bool {
+	if len(line) == 0 {
+		return false
+	}
+
+	// Lines starting with whitespace are continuations
+	if line[0] == ' ' || line[0] == '\t' {
+		return true
+	}
+
+	// Known stack trace patterns
+	continuationPrefixes := []string{
+		"File \"",       // Python: File "path", line N
+		"Traceback ",    // Python: Traceback (most recent call last):
+		"goroutine ",    // Go: goroutine 1 [running]:
+		"panic: ",       // Go panic
+		"    at ",       // Java: at com.package.Class.method
+		"Caused by: ",   // Java chained exceptions
+		"Exception in ", // Java
+		"... ",          // Java: ... 15 more
+	}
+
+	for _, prefix := range continuationPrefixes {
+		if strings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // Patterns to filter out (health checks, probes, etc.)
 var skipPatterns = []string{
 	"/health/live",
@@ -175,19 +290,20 @@ func shouldSkipLog(message string) bool {
 }
 
 func (c *Collector) streamPodLogs(pod Pod) {
+	defer logger.RecoverAndLog("k8s.streamPodLogs")
 	defer c.wg.Done()
 
-	log.Printf("Streaming logs from %s/%s", pod.Namespace, pod.Name)
+	logger.Info("streaming logs", "namespace", pod.Namespace, "pod", pod.Name)
 
 	cmd := exec.CommandContext(c.ctx, "kubectl", "logs", "-f", "--tail=100", "-n", pod.Namespace, pod.Name)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("Failed to get stdout for %s: %v", pod.Name, err)
+		logger.Error("failed to get stdout", "pod", pod.Name, "error", err)
 		return
 	}
 
 	if err := cmd.Start(); err != nil {
-		log.Printf("Failed to start kubectl logs for %s: %v", pod.Name, err)
+		logger.Error("failed to start kubectl logs", "pod", pod.Name, "error", err)
 		return
 	}
 
@@ -198,6 +314,10 @@ func (c *Collector) streamPodLogs(pod Pod) {
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
+	// Buffer for multiline log aggregation (stack traces)
+	buffer := newLogBuffer(c.storage, pod, 500*time.Millisecond)
+	defer buffer.flush()
 
 	for scanner.Scan() {
 		select {
@@ -216,19 +336,15 @@ func (c *Collector) streamPodLogs(pod Pod) {
 			continue
 		}
 
-		extraJSON, _ := json.Marshal(map[string]interface{}{"pod": pod.Name})
-		entry := protocol.LogEntry{
-			Timestamp: time.Now(),
-			Namespace: pod.Namespace,
-			Service:   pod.Service,
-			Level:     parseLogLevel(line),
-			Message:   line,
-			Extra:     extraJSON,
+		// Check if this line is a continuation of previous (stack trace)
+		if isContinuation(line) && buffer.hasEntry() {
+			buffer.append(line)
+		} else {
+			// Flush previous entry and start new one
+			buffer.flush()
+			buffer.start(line)
 		}
-
-		if err := c.storage.Insert(entry); err != nil {
-			log.Printf("Failed to store log: %v", err)
-		}
+		buffer.resetTimer()
 	}
 
 	cmd.Wait()

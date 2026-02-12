@@ -4,12 +4,12 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
 
+	"github.com/logpipe/logpipe/internal/logger"
 	"github.com/logpipe/logpipe/internal/protocol"
 )
 
@@ -53,14 +53,16 @@ func (a *API) Start() error {
 	}
 	a.listener = listener
 
-	// Make socket accessible
-	os.Chmod(a.socketPath, 0666)
+	// Restrict socket to owner only (security)
+	os.Chmod(a.socketPath, 0600)
 
 	go a.acceptLoop()
 	return nil
 }
 
 func (a *API) acceptLoop() {
+	defer logger.RecoverAndLog("api.acceptLoop")
+
 	for {
 		conn, err := a.listener.Accept()
 		if err != nil {
@@ -68,7 +70,7 @@ func (a *API) acceptLoop() {
 			case <-a.shutdown:
 				return
 			default:
-				log.Printf("Unix socket accept error: %v", err)
+				logger.Error("unix socket accept error", "error", err)
 				continue
 			}
 		}
@@ -79,6 +81,7 @@ func (a *API) acceptLoop() {
 }
 
 func (a *API) handleConn(conn net.Conn) {
+	defer logger.RecoverAndLog("api.handleConn")
 	defer a.wg.Done()
 	defer conn.Close()
 

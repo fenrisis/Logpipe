@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/logpipe/logpipe/internal/config"
+	"github.com/logpipe/logpipe/internal/logger"
 	"github.com/logpipe/logpipe/internal/server"
 	"github.com/spf13/cobra"
 )
@@ -68,9 +69,16 @@ var serverCmd = &cobra.Command{
 
 		go func() {
 			<-sigCh
+			logger.Info("shutdown signal received")
 			fmt.Println("\nShutting down...")
 			srv.Shutdown()
 		}()
+
+		logger.Info("server starting",
+			"port", cfg.Server.Port,
+			"data_dir", cfg.Server.DataDir,
+			"retention", cfg.Server.Retention,
+		)
 
 		fmt.Printf("Logpipe server starting\n")
 		fmt.Printf("  TCP port:    %d\n", cfg.Server.Port)

@@ -40,7 +40,10 @@ type Model struct {
 	searchQuery   string
 	lastLogID     int64
 	err           error
-	errorsOnly    bool                // Show only ERROR/WARN
+	filterError   bool                // Show ERROR level
+	filterWarn    bool                // Show WARN level
+	filterInfo    bool                // Show INFO level
+	filterDebug   bool                // Show DEBUG level
 	showDetail    bool                // Show log detail modal
 	detailLog     *protocol.LogEntry  // Currently viewed log
 
@@ -147,8 +150,22 @@ func (m Model) buildFilter() protocol.Filter {
 		filter.Search = m.searchQuery
 	}
 
-	if m.errorsOnly {
-		filter.Levels = []protocol.LogLevel{protocol.LevelError, protocol.LevelWarn}
+	// Build level filter if any level is selected
+	if m.filterError || m.filterWarn || m.filterInfo || m.filterDebug {
+		var levels []protocol.LogLevel
+		if m.filterError {
+			levels = append(levels, protocol.LevelError)
+		}
+		if m.filterWarn {
+			levels = append(levels, protocol.LevelWarn)
+		}
+		if m.filterInfo {
+			levels = append(levels, protocol.LevelInfo)
+		}
+		if m.filterDebug {
+			levels = append(levels, protocol.LevelDebug)
+		}
+		filter.Levels = levels
 	}
 
 	return filter
@@ -219,15 +236,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.streaming = !m.streaming
 
 		case msg.String() == "e":
-			// Toggle errors only filter
-			m.errorsOnly = !m.errorsOnly
+			// Toggle ERROR filter
+			m.filterError = !m.filterError
 			m.logOffset = 0
+			m.logSelected = 0
+			return m, m.fetchLogsCmd()
+
+		case msg.String() == "w":
+			// Toggle WARN filter
+			m.filterWarn = !m.filterWarn
+			m.logOffset = 0
+			m.logSelected = 0
+			return m, m.fetchLogsCmd()
+
+		case msg.String() == "i":
+			// Toggle INFO filter
+			m.filterInfo = !m.filterInfo
+			m.logOffset = 0
+			m.logSelected = 0
+			return m, m.fetchLogsCmd()
+
+		case msg.String() == "d":
+			// Toggle DEBUG filter
+			m.filterDebug = !m.filterDebug
+			m.logOffset = 0
+			m.logSelected = 0
 			return m, m.fetchLogsCmd()
 
 		case msg.String() == "c":
+			// Clear all filters
 			m.searchQuery = ""
 			m.searchInput.SetValue("")
-			m.errorsOnly = false
+			m.filterError = false
+			m.filterWarn = false
+			m.filterInfo = false
+			m.filterDebug = false
+			m.logOffset = 0
+			m.logSelected = 0
 			return m, m.fetchLogsCmd()
 
 		case msg.String() == "j" || msg.String() == "down":
@@ -513,9 +558,24 @@ func (m Model) renderLogs(width, height int) string {
 
 	// Header
 	header := titleStyle.Render("LOGS")
-	if m.errorsOnly {
-		header += errorStyle.Render(" [ERRORS ONLY]")
+
+	// Show active level filters
+	if m.filterError || m.filterWarn || m.filterInfo || m.filterDebug {
+		header += " "
+		if m.filterError {
+			header += errorStyle.Render("[E]")
+		}
+		if m.filterWarn {
+			header += warnStyle.Render("[W]")
+		}
+		if m.filterInfo {
+			header += infoStyle.Render("[I]")
+		}
+		if m.filterDebug {
+			header += debugStyle.Render("[D]")
+		}
 	}
+
 	if m.searchQuery != "" {
 		header += dimStyle.Render(fmt.Sprintf(" (search: %s)", m.searchQuery))
 	}
@@ -551,12 +611,21 @@ func (m Model) renderLogs(width, height int) string {
 		end = len(m.logs)
 	}
 
+	// Fixed width for source column (service name only, namespace shown in sidebar)
+	const sourceWidth = 20
+
 	for i := start; i < end; i++ {
 		logEntry := m.logs[i]
 
 		ts := logEntry.Timestamp.Format("15:04:05")
 		level := fmt.Sprintf("%-5s", logEntry.Level)
-		source := fmt.Sprintf("[%s/%s]", logEntry.Namespace, logEntry.Service)
+
+		// Truncate or pad service name to fixed width
+		source := logEntry.Service
+		if len(source) > sourceWidth {
+			source = source[:sourceWidth-1] + "…"
+		}
+		source = fmt.Sprintf("%-*s", sourceWidth, source)
 
 		levelStyle := getLevelStyle(string(logEntry.Level))
 
@@ -566,7 +635,7 @@ func (m Model) renderLogs(width, height int) string {
 			prefix = "▸ "
 		}
 
-		line := fmt.Sprintf("%s%s %s %-18s %s",
+		line := fmt.Sprintf("%s%s %s %s %s",
 			prefix,
 			dimStyle.Render(ts),
 			levelStyle.Render(level),

@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"sync"
 	"time"
 
+	"github.com/logpipe/logpipe/internal/logger"
 	"github.com/logpipe/logpipe/internal/protocol"
 )
 
@@ -43,6 +43,8 @@ func (c *Collector) Start() error {
 }
 
 func (c *Collector) acceptLoop() {
+	defer logger.RecoverAndLog("collector.acceptLoop")
+
 	for {
 		conn, err := c.listener.Accept()
 		if err != nil {
@@ -50,7 +52,7 @@ func (c *Collector) acceptLoop() {
 			case <-c.shutdown:
 				return
 			default:
-				log.Printf("Accept error: %v", err)
+				logger.Error("accept failed", "error", err)
 				continue
 			}
 		}
@@ -61,11 +63,12 @@ func (c *Collector) acceptLoop() {
 }
 
 func (c *Collector) handleConn(conn net.Conn) {
+	defer logger.RecoverAndLog("collector.handleConn")
 	defer c.wg.Done()
 	defer conn.Close()
 
 	remoteAddr := conn.RemoteAddr().String()
-	log.Printf("New connection from %s", remoteAddr)
+	logger.Debug("new connection", "remote", remoteAddr)
 
 	scanner := bufio.NewScanner(conn)
 	// Increase buffer size for large log messages
@@ -85,7 +88,7 @@ func (c *Collector) handleConn(conn net.Conn) {
 
 		var entry protocol.LogEntry
 		if err := json.Unmarshal(line, &entry); err != nil {
-			log.Printf("Invalid JSON from %s: %v", remoteAddr, err)
+			logger.Warn("invalid JSON received", "remote", remoteAddr, "error", err)
 			continue
 		}
 
@@ -106,15 +109,15 @@ func (c *Collector) handleConn(conn net.Conn) {
 		}
 
 		if err := c.storage.Insert(entry); err != nil {
-			log.Printf("Failed to store log: %v", err)
+			logger.Error("failed to store log", "error", err)
 		}
 	}
 
 	if err := scanner.Err(); err != nil && err != io.EOF {
-		log.Printf("Scanner error from %s: %v", remoteAddr, err)
+		logger.Error("scanner error", "remote", remoteAddr, "error", err)
 	}
 
-	log.Printf("Connection closed: %s", remoteAddr)
+	logger.Debug("connection closed", "remote", remoteAddr)
 }
 
 func (c *Collector) Stop() {

@@ -12,7 +12,7 @@ func Run() error {
 	p := tea.NewProgram(
 		model,
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
+		// Mouse capture disabled to allow text selection for copying
 	)
 
 	if _, err := p.Run(); err != nil {
