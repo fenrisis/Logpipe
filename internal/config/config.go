@@ -13,6 +13,9 @@ import (
 type Config struct {
 	Server ServerConfig `yaml:"server"`
 	UI     UIConfig     `yaml:"ui"`
+
+	// Resolved paths (not serialized)
+	configDir string `yaml:"-"`
 }
 
 type ServerConfig struct {
@@ -29,13 +32,41 @@ type UIConfig struct {
 	PageSize   int    `yaml:"page_size"`  // logs per page
 }
 
-// Default configuration
-func Default() *Config {
+// XDG directory helpers
+
+// xdgConfigHome returns $XDG_CONFIG_HOME or ~/.config
+func xdgConfigHome() string {
+	if dir := os.Getenv("XDG_CONFIG_HOME"); dir != "" {
+		return dir
+	}
 	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config")
+}
+
+// xdgDataHome returns $XDG_DATA_HOME or ~/.local/share
+func xdgDataHome() string {
+	if dir := os.Getenv("XDG_DATA_HOME"); dir != "" {
+		return dir
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "share")
+}
+
+// XDGStateHome returns $XDG_STATE_HOME or ~/.local/state
+func XDGStateHome() string {
+	if dir := os.Getenv("XDG_STATE_HOME"); dir != "" {
+		return dir
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".local", "state")
+}
+
+// Default configuration using XDG Base Directory paths
+func Default() *Config {
 	return &Config{
 		Server: ServerConfig{
 			Port:            5555,
-			DataDir:         filepath.Join(home, ".logpipe"),
+			DataDir:         filepath.Join(xdgDataHome(), "logpipe"),
 			Retention:       "7d",
 			CleanupInterval: 1, // 1 hour
 		},
@@ -44,6 +75,7 @@ func Default() *Config {
 			Timestamps: "relative",
 			PageSize:   100,
 		},
+		configDir: filepath.Join(xdgConfigHome(), "logpipe"),
 	}
 }
 
@@ -55,10 +87,17 @@ func Load() (*Config, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Config doesn't exist, use defaults
-			return cfg, nil
+			// Try legacy path ~/.logpipe/config.yaml
+			home, _ := os.UserHomeDir()
+			legacyPath := filepath.Join(home, ".logpipe", "config.yaml")
+			data, err = os.ReadFile(legacyPath)
+			if err != nil {
+				// No config found, use defaults
+				return cfg, nil
+			}
+		} else {
+			return nil, fmt.Errorf("failed to read config: %w", err)
 		}
-		return nil, fmt.Errorf("failed to read config: %w", err)
 	}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
@@ -73,18 +112,28 @@ func Load() (*Config, error) {
 		cfg.Server.DataDir = filepath.Join(home, cfg.Server.DataDir[1:])
 	}
 
+	// Migrate legacy ~/.logpipe data_dir to XDG
+	home, _ := os.UserHomeDir()
+	if cfg.Server.DataDir == filepath.Join(home, ".logpipe") {
+		cfg.Server.DataDir = Default().Server.DataDir
+	}
+
 	return cfg, nil
 }
 
 // ConfigPath returns the path to the config file
 func (c *Config) ConfigPath() string {
-	return filepath.Join(c.Server.DataDir, "config.yaml")
+	configDir := c.configDir
+	if configDir == "" {
+		configDir = filepath.Join(xdgConfigHome(), "logpipe")
+	}
+	return filepath.Join(configDir, "config.yaml")
 }
 
 // Save saves the config to file
 func (c *Config) Save() error {
-	// Ensure directory exists
-	if err := os.MkdirAll(c.Server.DataDir, 0755); err != nil {
+	configDir := filepath.Dir(c.ConfigPath())
+	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
@@ -134,21 +183,22 @@ func CreateDefaultConfig() error {
 		return nil // Already exists
 	}
 
-	// Create directory
-	if err := os.MkdirAll(cfg.Server.DataDir, 0755); err != nil {
+	// Create config directory
+	configDir := filepath.Dir(configPath)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return err
 	}
 
 	// Write default config with comments
-	content := `# Logpipe Configuration
-# Location: ~/.logpipe/config.yaml
+	content := fmt.Sprintf(`# Logpipe Configuration
+# Location: %s
 
 server:
   # TCP port for log collection
   port: 5555
 
-  # Data directory for SQLite database and socket
-  data_dir: ~/.logpipe
+  # Data directory for SQLite database and socket (XDG_DATA_HOME)
+  # data_dir: %s
 
   # Log retention period (e.g., 7d, 24h, 30d)
   retention: 7d
@@ -165,7 +215,7 @@ ui:
 
   # Number of logs per page
   page_size: 100
-`
+`, configPath, cfg.Server.DataDir)
 
 	return os.WriteFile(configPath, []byte(content), 0644)
 }

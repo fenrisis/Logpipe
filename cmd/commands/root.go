@@ -20,31 +20,34 @@ var rootCmd = &cobra.Command{
 Run 'logpipe server' to start the log collection daemon.
 Run 'logpipe' (no args) to launch the interactive TUI.
 Run 'logpipe logs -f' to tail logs in the terminal.`,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		// Initialize logger AFTER cobra has parsed flags
+		cfg := logger.DefaultConfig()
+		if verbose {
+			cfg.Level = slog.LevelDebug
+		}
+		if err := logger.Init(cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to initialize logger: %v\n", err)
+		}
+		logger.Info("logpipe starting", "version", "0.1.0", "verbose", verbose)
+		return nil
+	},
+	PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
+		logger.Info("logpipe shutdown complete")
+		logger.Close()
+		return nil
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return tui.Run()
 	},
 }
 
 func Execute() {
-	// Initialize logger
-	cfg := logger.DefaultConfig()
-	if verbose {
-		cfg.Level = slog.LevelDebug
-	}
-	if err := logger.Init(cfg); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to initialize logger: %v\n", err)
-	}
-	defer logger.Close()
-
-	logger.Info("logpipe starting", "version", "0.1.0", "verbose", verbose)
-
 	if err := rootCmd.Execute(); err != nil {
 		logger.Error("command failed", "error", err)
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-
-	logger.Info("logpipe shutdown complete")
 }
 
 func init() {

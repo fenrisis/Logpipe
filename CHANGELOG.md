@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.1.2] - 2026-03-10
+
+### Fixed
+- **Verbose flag actually works now** — `-v` / `--verbose` was ignored because logger initialized before cobra parsed flags; moved to `PersistentPreRunE`
+- **Scanner buffer overflow** — API and client scanners used default 64KB buffer, causing crashes with ~40-55 logs; increased to 10MB max
+- **Subscriber channel overflow** — increased from 100 to 1000 entries to handle high-volume namespaces (20+ pods)
+- **Logger reinitialization** — removed `initialized` guard that prevented changing log level at runtime
+
+### Changed
+- **XDG Base Directory compliance** — paths moved per freedesktop.org spec:
+  - Config: `~/.config/logpipe/config.yaml` (was `~/.logpipe/config.yaml`)
+  - Data/DB/socket: `~/.local/share/logpipe/` (was `~/.logpipe/`)
+  - Logs: `~/.local/state/logpipe/logpipe.log` (was `~/.logpipe/logpipe.log`)
+  - Respects `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME` env vars
+  - Legacy `~/.logpipe/config.yaml` is still read as fallback
+
 ## [0.1.1] - 2025-02-12
 
 ### Added

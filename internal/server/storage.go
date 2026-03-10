@@ -222,7 +222,7 @@ func (s *Storage) getServices(namespace string) ([]string, error) {
 }
 
 func (s *Storage) Subscribe() <-chan protocol.LogEntry {
-	ch := make(chan protocol.LogEntry, 100)
+	ch := make(chan protocol.LogEntry, 1000)
 	s.subMu.Lock()
 	s.subscribers = append(s.subscribers, ch)
 	s.subMu.Unlock()

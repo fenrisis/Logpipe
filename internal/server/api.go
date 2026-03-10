@@ -86,6 +86,7 @@ func (a *API) handleConn(conn net.Conn) {
 	defer conn.Close()
 
 	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 64*1024), 10*1024*1024) // 10MB max for large responses
 	encoder := json.NewEncoder(conn)
 
 	for scanner.Scan() {

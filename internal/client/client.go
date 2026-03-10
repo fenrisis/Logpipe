@@ -36,12 +36,16 @@ type Response struct {
 }
 
 func New() (*Client, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get home directory: %w", err)
+	dataDir := os.Getenv("XDG_DATA_HOME")
+	if dataDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get home directory: %w", err)
+		}
+		dataDir = filepath.Join(home, ".local", "share")
 	}
 
-	socketPath := filepath.Join(home, ".logpipe", "logpipe.sock")
+	socketPath := filepath.Join(dataDir, "logpipe", "logpipe.sock")
 
 	// Retry connection a few times
 	var client *Client
@@ -62,11 +66,14 @@ func NewWithSocket(socketPath string) (*Client, error) {
 		return nil, fmt.Errorf("failed to connect to logpipe server: %w (is 'logpipe server' running?)", err)
 	}
 
+	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 64*1024), 10*1024*1024) // 10MB max for large log responses
+
 	return &Client{
 		socketPath: socketPath,
 		conn:       conn,
 		encoder:    json.NewEncoder(conn),
-		decoder:    bufio.NewScanner(conn),
+		decoder:    scanner,
 	}, nil
 }
 

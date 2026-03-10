@@ -19,11 +19,15 @@ type Config struct {
 	MaxSizeMB int        // Max file size before rotation in MB
 }
 
-// DefaultConfig returns default configuration
+// DefaultConfig returns default configuration using XDG_STATE_HOME
 func DefaultConfig() Config {
-	home, _ := os.UserHomeDir()
+	stateDir := os.Getenv("XDG_STATE_HOME")
+	if stateDir == "" {
+		home, _ := os.UserHomeDir()
+		stateDir = filepath.Join(home, ".local", "state")
+	}
 	return Config{
-		LogPath:   filepath.Join(home, ".logpipe", "logpipe.log"),
+		LogPath:   filepath.Join(stateDir, "logpipe", "logpipe.log"),
 		Level:     slog.LevelInfo,
 		MaxSizeMB: 10,
 	}
@@ -197,13 +201,17 @@ func levelString(l slog.Level) string {
 	}
 }
 
-// Init initializes the global logger with the given configuration
+// Init initializes the global logger with the given configuration.
+// Can be called multiple times — subsequent calls will close the previous writer
+// and reinitialize with new settings.
 func Init(cfg Config) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 
-	if initialized {
-		return nil
+	// Close previous writer if reinitializing
+	if globalWriter != nil {
+		globalWriter.Close()
+		globalWriter = nil
 	}
 
 	w, err := newRotatingWriter(cfg.LogPath, cfg.MaxSizeMB)
