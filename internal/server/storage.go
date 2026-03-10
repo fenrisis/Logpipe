@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/logpipe/logpipe/internal/logger"
 	"github.com/logpipe/logpipe/internal/protocol"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -28,7 +30,24 @@ CREATE TABLE IF NOT EXISTS logs (
 CREATE INDEX IF NOT EXISTS idx_ts ON logs(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_ns ON logs(namespace, service);
 CREATE INDEX IF NOT EXISTS idx_level ON logs(level) WHERE level IN ('ERROR', 'WARN');
-CREATE INDEX IF NOT EXISTS idx_message ON logs(message);
+`
+
+const ftsSchema = `
+CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(
+    message, namespace, service,
+    content='logs',
+    content_rowid='id'
+);
+
+CREATE TRIGGER IF NOT EXISTS logs_fts_ai AFTER INSERT ON logs BEGIN
+    INSERT INTO logs_fts(rowid, message, namespace, service)
+    VALUES (new.id, new.message, new.namespace, new.service);
+END;
+
+CREATE TRIGGER IF NOT EXISTS logs_fts_ad AFTER DELETE ON logs BEGIN
+    INSERT INTO logs_fts(logs_fts, rowid, message, namespace, service)
+    VALUES ('delete', old.id, old.message, old.namespace, old.service);
+END;
 `
 
 type Storage struct {
@@ -50,10 +69,21 @@ func NewStorage(dataDir string) (*Storage, error) {
 		return nil, fmt.Errorf("failed to apply schema: %w", err)
 	}
 
-	return &Storage{
+	// Apply FTS5 schema
+	if _, err := db.Exec(ftsSchema); err != nil {
+		// FTS5 may not be available in all SQLite builds, fall back to LIKE
+		logger.Warn("FTS5 not available, falling back to LIKE search", "error", err)
+	}
+
+	s := &Storage{
 		db:          db,
 		subscribers: make([]chan protocol.LogEntry, 0),
-	}, nil
+	}
+
+	// Rebuild FTS index if empty but logs exist (first run on existing DB)
+	s.rebuildFTSIfNeeded()
+
+	return s, nil
 }
 
 func (s *Storage) Insert(entry protocol.LogEntry) error {
@@ -113,8 +143,13 @@ func (s *Storage) Query(filter protocol.Filter) ([]protocol.LogEntry, error) {
 		}
 	}
 	if filter.Search != "" {
-		query += " AND message LIKE ?"
-		args = append(args, "%"+filter.Search+"%")
+		if s.hasFTS() {
+			query += " AND id IN (SELECT rowid FROM logs_fts WHERE logs_fts MATCH ?)"
+			args = append(args, ftsQuery(filter.Search))
+		} else {
+			query += " AND message LIKE ?"
+			args = append(args, "%"+filter.Search+"%")
+		}
 	}
 	if !filter.From.IsZero() {
 		query += " AND ts >= ?"
@@ -271,6 +306,62 @@ func (s *Storage) Cleanup(retention time.Duration) (int64, error) {
 
 func (s *Storage) Close() error {
 	return s.db.Close()
+}
+
+// hasFTS checks if the FTS5 table exists
+func (s *Storage) hasFTS() bool {
+	var name string
+	err := s.db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='logs_fts'`).Scan(&name)
+	return err == nil
+}
+
+// rebuildFTSIfNeeded rebuilds the FTS index if the FTS table is empty but logs exist
+func (s *Storage) rebuildFTSIfNeeded() {
+	if !s.hasFTS() {
+		return
+	}
+
+	var ftsCount, logsCount int64
+	s.db.QueryRow(`SELECT COUNT(*) FROM logs_fts`).Scan(&ftsCount)
+	s.db.QueryRow(`SELECT COUNT(*) FROM logs`).Scan(&logsCount)
+
+	if logsCount > 0 && ftsCount == 0 {
+		logger.Info("rebuilding FTS index", "logs", logsCount)
+		if _, err := s.db.Exec(`INSERT INTO logs_fts(logs_fts) VALUES ('rebuild')`); err != nil {
+			logger.Error("failed to rebuild FTS index", "error", err)
+		} else {
+			logger.Info("FTS index rebuilt")
+		}
+	}
+}
+
+// ftsQuery converts user input into a safe FTS5 query with prefix matching.
+// "connection timeo" → "connection* timeo*"
+func ftsQuery(input string) string {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return input
+	}
+
+	words := strings.Fields(input)
+	var parts []string
+	for _, w := range words {
+		// Strip FTS5 special characters
+		clean := strings.Map(func(r rune) rune {
+			if strings.ContainsRune(`"*(){}[]^~:`, r) {
+				return -1
+			}
+			return r
+		}, w)
+		if clean != "" {
+			parts = append(parts, clean+"*")
+		}
+	}
+
+	if len(parts) == 0 {
+		return input
+	}
+	return strings.Join(parts, " ")
 }
 
 func repeatString(s string, n int) string {
