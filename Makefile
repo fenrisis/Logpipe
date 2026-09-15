@@ -3,18 +3,16 @@
 BINARY_NAME = logpipe
 BUILD_DIR = bin
 PREFIX = /usr/local
+GO_TAGS = sqlite_fts5
 
 # Detect OS
 UNAME_S := $(shell uname -s)
-
-# CGO flags for SQLite FTS5 support
-export CGO_CFLAGS = -DSQLITE_ENABLE_FTS5
 
 # Build
 build:
 	@echo "Building $(BINARY_NAME)..."
 	@mkdir -p $(BUILD_DIR)
-	CGO_ENABLED=1 go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/logpipe
+	CGO_ENABLED=1 go build -tags "$(GO_TAGS)" -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/logpipe
 	@echo "Done: $(BUILD_DIR)/$(BINARY_NAME)"
 
 # Install binary
@@ -70,7 +68,7 @@ uninstall: uninstall-service
 release:
 	@echo "Building release binaries..."
 	@mkdir -p $(BUILD_DIR)/release
-	CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o $(BUILD_DIR)/release/$(BINARY_NAME)-$(shell go env GOOS)-$(shell go env GOARCH) ./cmd/logpipe
+	CGO_ENABLED=1 go build -tags "$(GO_TAGS)" -trimpath -ldflags="-s -w" -o $(BUILD_DIR)/release/$(BINARY_NAME)-$(shell go env GOOS)-$(shell go env GOARCH) ./cmd/logpipe
 	@echo "Done. Binaries in $(BUILD_DIR)/release/"
 	@ls -lh $(BUILD_DIR)/release/
 
@@ -96,7 +94,7 @@ logs: build
 
 # Run tests
 test:
-	go test ./...
+	CGO_ENABLED=1 go test -tags "$(GO_TAGS)" ./...
 
 # End-to-end test
 test-e2e: build
