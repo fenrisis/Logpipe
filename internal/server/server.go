@@ -2,12 +2,14 @@ package server
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
-	"github.com/logpipe/logpipe/internal/logger"
+	"github.com/fenrisis/logpipe/internal/logger"
 )
 
 type Config struct {
+	Host            string
 	TCPPort         int
 	DataDir         string
 	Retention       string
@@ -20,16 +22,21 @@ type Server struct {
 	collector *Collector
 	api       *API
 
-	shutdown chan struct{}
+	shutdown     chan struct{}
+	shutdownOnce sync.Once
 }
 
 func New(cfg Config) (*Server, error) {
+	if cfg.Host == "" {
+		cfg.Host = "127.0.0.1"
+	}
+
 	storage, err := NewStorage(cfg.DataDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize storage: %w", err)
 	}
 
-	collector := NewCollector(cfg.TCPPort, storage)
+	collector := NewCollector(cfg.Host, cfg.TCPPort, storage)
 	api := NewAPI(cfg.DataDir, storage)
 
 	return &Server{
@@ -100,12 +107,16 @@ func (s *Server) runCleanup(retention time.Duration) {
 }
 
 func (s *Server) Shutdown() {
-	logger.Info("server shutting down")
-	close(s.shutdown)
-	s.collector.Stop()
-	s.api.Stop()
-	s.storage.Close()
-	logger.Info("server shutdown complete")
+	s.shutdownOnce.Do(func() {
+		logger.Info("server shutting down")
+		close(s.shutdown)
+		s.collector.Stop()
+		s.api.Stop()
+		if err := s.storage.Close(); err != nil {
+			logger.Error("failed to close storage", "error", err)
+		}
+		logger.Info("server shutdown complete")
+	})
 }
 
 // Storage returns the server's storage for direct access.

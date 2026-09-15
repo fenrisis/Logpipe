@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/logpipe/logpipe/internal/protocol"
+	"github.com/fenrisis/logpipe/internal/protocol"
 )
 
 type Client struct {

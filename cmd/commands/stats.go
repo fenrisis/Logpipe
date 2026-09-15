@@ -3,7 +3,7 @@ package commands
 import (
 	"fmt"
 
-	"github.com/logpipe/logpipe/internal/client"
+	"github.com/fenrisis/logpipe/internal/client"
 	"github.com/spf13/cobra"
 )
 

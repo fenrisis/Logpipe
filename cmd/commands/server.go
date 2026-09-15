@@ -7,13 +7,14 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/logpipe/logpipe/internal/config"
-	"github.com/logpipe/logpipe/internal/logger"
-	"github.com/logpipe/logpipe/internal/server"
+	"github.com/fenrisis/logpipe/internal/config"
+	"github.com/fenrisis/logpipe/internal/logger"
+	"github.com/fenrisis/logpipe/internal/server"
 	"github.com/spf13/cobra"
 )
 
 var (
+	serverHost    string
 	serverPort    int
 	serverDataDir string
 	serverDaemon  bool
@@ -36,6 +37,9 @@ var serverCmd = &cobra.Command{
 		if cmd.Flags().Changed("port") {
 			cfg.Server.Port = serverPort
 		}
+		if cmd.Flags().Changed("host") {
+			cfg.Server.Host = serverHost
+		}
 		if cmd.Flags().Changed("data") {
 			cfg.Server.DataDir = serverDataDir
 		}
@@ -52,6 +56,7 @@ var serverCmd = &cobra.Command{
 		config.CreateDefaultConfig()
 
 		srvCfg := server.Config{
+			Host:            cfg.Server.Host,
 			TCPPort:         cfg.Server.Port,
 			DataDir:         cfg.Server.DataDir,
 			Retention:       cfg.Server.Retention,
@@ -81,7 +86,7 @@ var serverCmd = &cobra.Command{
 		)
 
 		fmt.Printf("Logpipe server starting\n")
-		fmt.Printf("  TCP port:    %d\n", cfg.Server.Port)
+		fmt.Printf("  TCP address: %s:%d\n", cfg.Server.Host, cfg.Server.Port)
 		fmt.Printf("  Data dir:    %s\n", cfg.Server.DataDir)
 		fmt.Printf("  Socket:      %s\n", filepath.Join(cfg.Server.DataDir, "logpipe.sock"))
 		fmt.Printf("  Retention:   %s\n", cfg.Server.Retention)
@@ -93,8 +98,9 @@ var serverCmd = &cobra.Command{
 }
 
 func init() {
+	serverCmd.Flags().StringVar(&serverHost, "host", "127.0.0.1", "TCP bind host for log collection")
 	serverCmd.Flags().IntVarP(&serverPort, "port", "p", 5555, "TCP port for log collection")
-	serverCmd.Flags().StringVarP(&serverDataDir, "data", "d", "", "Data directory (default: ~/.logpipe)")
+	serverCmd.Flags().StringVarP(&serverDataDir, "data", "d", "", "Data directory (default: $XDG_DATA_HOME/logpipe)")
 	serverCmd.Flags().StringVar(&retention, "retention", "7d", "Log retention period")
 	serverCmd.Flags().BoolVar(&serverDaemon, "daemon", false, "Run as daemon (background)")
 }

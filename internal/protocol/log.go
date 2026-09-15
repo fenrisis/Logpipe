@@ -30,10 +30,10 @@ type LogEntry struct {
 
 // Namespace represents a log namespace with its services
 type Namespace struct {
-	Name        string   `json:"name"`
-	Services    []string `json:"services"`
-	LogCount    int64    `json:"log_count"`
-	ErrorCount  int64    `json:"error_count"`
+	Name       string   `json:"name"`
+	Services   []string `json:"services"`
+	LogCount   int64    `json:"log_count"`
+	ErrorCount int64    `json:"error_count"`
 }
 
 // Filter for querying logs

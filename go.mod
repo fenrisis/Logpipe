@@ -1,4 +1,4 @@
-module github.com/logpipe/logpipe
+module github.com/fenrisis/logpipe
 
 go 1.24.0
 

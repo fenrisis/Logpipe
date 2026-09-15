@@ -5,16 +5,19 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/logpipe/logpipe/internal/logger"
-	"github.com/logpipe/logpipe/internal/tui"
+	"github.com/fenrisis/logpipe/internal/logger"
+	"github.com/fenrisis/logpipe/internal/tui"
 	"github.com/spf13/cobra"
 )
 
 var verbose bool
 
+const version = "0.2.0"
+
 var rootCmd = &cobra.Command{
-	Use:   "logpipe",
-	Short: "A terminal UI for viewing logs in real-time",
+	Use:     "logpipe",
+	Short:   "A terminal UI for viewing logs in real-time",
+	Version: version,
 	Long: `Logpipe is a k9s-style terminal interface for logs.
 
 Run 'logpipe server' to start the log collection daemon.
@@ -29,7 +32,7 @@ Run 'logpipe logs -f' to tail logs in the terminal.`,
 		if err := logger.Init(cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to initialize logger: %v\n", err)
 		}
-		logger.Info("logpipe starting", "version", "0.1.0", "verbose", verbose)
+		logger.Info("logpipe starting", "version", version, "verbose", verbose)
 		return nil
 	},
 	PersistentPostRunE: func(cmd *cobra.Command, args []string) error {
@@ -58,4 +61,5 @@ func init() {
 	rootCmd.AddCommand(queryCmd)
 	rootCmd.AddCommand(statsCmd)
 	rootCmd.AddCommand(k8sCmd)
+	rootCmd.AddCommand(configCmd)
 }

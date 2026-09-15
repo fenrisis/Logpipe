@@ -3,13 +3,14 @@ package commands
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
-	"github.com/logpipe/logpipe/internal/config"
-	"github.com/logpipe/logpipe/internal/k8s"
-	"github.com/logpipe/logpipe/internal/logger"
-	"github.com/logpipe/logpipe/internal/server"
-	"github.com/logpipe/logpipe/internal/tui"
+	"github.com/fenrisis/logpipe/internal/config"
+	"github.com/fenrisis/logpipe/internal/k8s"
+	"github.com/fenrisis/logpipe/internal/logger"
+	"github.com/fenrisis/logpipe/internal/server"
+	"github.com/fenrisis/logpipe/internal/tui"
 	"github.com/spf13/cobra"
 )
 
@@ -77,6 +78,7 @@ func runK8s(cmd *cobra.Command, args []string) error {
 
 	// Start full server in background (needed for TUI to connect via socket)
 	srvCfg := server.Config{
+		Host:            cfg.Server.Host,
 		TCPPort:         cfg.Server.Port,
 		DataDir:         cfg.Server.DataDir,
 		Retention:       cfg.Server.Retention,
@@ -179,7 +181,11 @@ func listPods(collector *k8s.Collector) error {
 		if pod.Status == "Running" {
 			status = "●"
 		}
-		fmt.Printf("  %s %s (%s)\n", status, pod.Name, pod.Service)
+		details := pod.Service
+		if len(pod.Containers) > 0 {
+			details += "; containers: " + strings.Join(pod.Containers, ", ")
+		}
+		fmt.Printf("  %s %s (%s)\n", status, pod.Name, details)
 	}
 
 	return nil

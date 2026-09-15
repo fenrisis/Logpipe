@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/logpipe/logpipe/internal/logger"
-	"github.com/logpipe/logpipe/internal/protocol"
+	"github.com/fenrisis/logpipe/internal/logger"
+	"github.com/fenrisis/logpipe/internal/protocol"
 )
 
 // API request/response types
@@ -31,15 +31,20 @@ type API struct {
 	storage    *Storage
 	socketPath string
 
-	wg       sync.WaitGroup
-	shutdown chan struct{}
+	wg          sync.WaitGroup
+	shutdown    chan struct{}
+	stopOnce    sync.Once
+	connMu      sync.Mutex
+	stopping    bool
+	activeConns map[net.Conn]struct{}
 }
 
 func NewAPI(dataDir string, storage *Storage) *API {
 	return &API{
-		socketPath: filepath.Join(dataDir, "logpipe.sock"),
-		storage:    storage,
-		shutdown:   make(chan struct{}),
+		socketPath:  filepath.Join(dataDir, "logpipe.sock"),
+		storage:     storage,
+		shutdown:    make(chan struct{}),
+		activeConns: make(map[net.Conn]struct{}),
 	}
 }
 
@@ -56,12 +61,14 @@ func (a *API) Start() error {
 	// Restrict socket to owner only (security)
 	os.Chmod(a.socketPath, 0600)
 
+	a.wg.Add(1)
 	go a.acceptLoop()
 	return nil
 }
 
 func (a *API) acceptLoop() {
 	defer logger.RecoverAndLog("api.acceptLoop")
+	defer a.wg.Done()
 
 	for {
 		conn, err := a.listener.Accept()
@@ -75,14 +82,37 @@ func (a *API) acceptLoop() {
 			}
 		}
 
-		a.wg.Add(1)
+		if !a.registerConn(conn) {
+			conn.Close()
+			return
+		}
 		go a.handleConn(conn)
 	}
 }
 
+func (a *API) registerConn(conn net.Conn) bool {
+	a.connMu.Lock()
+	defer a.connMu.Unlock()
+
+	if a.stopping {
+		return false
+	}
+
+	a.activeConns[conn] = struct{}{}
+	a.wg.Add(1)
+	return true
+}
+
+func (a *API) unregisterConn(conn net.Conn) {
+	a.connMu.Lock()
+	delete(a.activeConns, conn)
+	a.connMu.Unlock()
+	a.wg.Done()
+}
+
 func (a *API) handleConn(conn net.Conn) {
 	defer logger.RecoverAndLog("api.handleConn")
-	defer a.wg.Done()
+	defer a.unregisterConn(conn)
 	defer conn.Close()
 
 	scanner := bufio.NewScanner(conn)
@@ -166,10 +196,19 @@ func (a *API) SocketPath() string {
 }
 
 func (a *API) Stop() {
-	close(a.shutdown)
-	if a.listener != nil {
-		a.listener.Close()
-	}
-	os.Remove(a.socketPath)
+	a.stopOnce.Do(func() {
+		close(a.shutdown)
+		if a.listener != nil {
+			a.listener.Close()
+		}
+
+		a.connMu.Lock()
+		a.stopping = true
+		for conn := range a.activeConns {
+			conn.Close()
+		}
+		a.connMu.Unlock()
+	})
 	a.wg.Wait()
+	os.Remove(a.socketPath)
 }

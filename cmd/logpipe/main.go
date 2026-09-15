@@ -1,6 +1,6 @@
 package main
 
-import "github.com/logpipe/logpipe/cmd/commands"
+import "github.com/fenrisis/logpipe/cmd/commands"
 
 func main() {
 	commands.Execute()

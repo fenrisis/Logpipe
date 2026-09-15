@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/logpipe/logpipe/internal/client"
-	"github.com/logpipe/logpipe/internal/protocol"
+	"github.com/fenrisis/logpipe/internal/client"
+	"github.com/fenrisis/logpipe/internal/protocol"
 	"github.com/spf13/cobra"
 )
 

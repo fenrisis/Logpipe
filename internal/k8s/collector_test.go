@@ -3,7 +3,7 @@ package k8s
 import (
 	"testing"
 
-	"github.com/logpipe/logpipe/internal/protocol"
+	"github.com/fenrisis/logpipe/internal/protocol"
 )
 
 func TestIsContinuation(t *testing.T) {

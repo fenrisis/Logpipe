@@ -9,8 +9,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/logpipe/logpipe/internal/client"
-	"github.com/logpipe/logpipe/internal/protocol"
+	"github.com/fenrisis/logpipe/internal/client"
+	"github.com/fenrisis/logpipe/internal/protocol"
 )
 
 type Focus int
@@ -28,24 +28,24 @@ type Model struct {
 	stats      protocol.Stats
 
 	// UI State
-	focus         Focus
-	nsSelected    int
-	svcSelected   int
-	logSelected   int
-	logOffset     int
-	showServices  bool
-	streaming     bool
-	searchActive  bool
-	searchInput   textinput.Model
-	searchQuery   string
-	lastLogID     int64
-	err           error
-	filterError   bool                // Show ERROR level
-	filterWarn    bool                // Show WARN level
-	filterInfo    bool                // Show INFO level
-	filterDebug   bool                // Show DEBUG level
-	showDetail    bool                // Show log detail modal
-	detailLog     *protocol.LogEntry  // Currently viewed log
+	focus        Focus
+	nsSelected   int
+	svcSelected  int
+	logSelected  int
+	logOffset    int
+	showServices bool
+	streaming    bool
+	searchActive bool
+	searchInput  textinput.Model
+	searchQuery  string
+	lastLogID    int64
+	err          error
+	filterError  bool               // Show ERROR level
+	filterWarn   bool               // Show WARN level
+	filterInfo   bool               // Show INFO level
+	filterDebug  bool               // Show DEBUG level
+	showDetail   bool               // Show log detail modal
+	detailLog    *protocol.LogEntry // Currently viewed log
 
 	// Dimensions
 	width  int

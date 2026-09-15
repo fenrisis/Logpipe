@@ -1,6 +1,6 @@
 [Unit]
 Description=Logpipe Log Collection Server
-Documentation=https://github.com/logpipe/logpipe
+Documentation=https://github.com/fenrisis/logpipe
 After=network.target
 
 [Service]

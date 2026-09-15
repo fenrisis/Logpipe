@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/logpipe/logpipe/internal/logger"
-	"github.com/logpipe/logpipe/internal/protocol"
-	"github.com/logpipe/logpipe/internal/server"
+	"github.com/fenrisis/logpipe/internal/logger"
+	"github.com/fenrisis/logpipe/internal/protocol"
+	"github.com/fenrisis/logpipe/internal/server"
 )
 
 // Collector streams logs from Kubernetes pods and stores them directly.
@@ -25,79 +25,179 @@ type Collector struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	// Track running kubectl processes for cleanup
-	procMu    sync.Mutex
-	processes []*exec.Cmd
+	discoveryInterval time.Duration
+	podSource         func(namespace string) ([]Pod, error)
+	streamLogs        func(context.Context, Pod, string, bool)
+
+	streamMu      sync.Mutex
+	activeStreams map[string]activeStream
+	seenStreams   map[string]struct{}
+	stopping      bool
+	stopOnce      sync.Once
 }
 
 // Pod represents a Kubernetes pod.
 type Pod struct {
-	Name      string
-	Service   string
-	Namespace string
-	Status    string
+	Name       string
+	UID        string
+	Service    string
+	Namespace  string
+	Status     string
+	Containers []string
 }
+
+type activeStream struct {
+	namespace string
+	cancel    context.CancelFunc
+}
+
+const defaultDiscoveryInterval = 10 * time.Second
 
 // NewCollector creates a new K8s log collector.
 func NewCollector(storage *server.Storage, namespaces []string, podFilter []string) *Collector {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Collector{
-		namespaces: namespaces,
-		podFilter:  podFilter,
-		storage:    storage,
-		ctx:        ctx,
-		cancel:     cancel,
+	collector := &Collector{
+		namespaces:        namespaces,
+		podFilter:         podFilter,
+		storage:           storage,
+		ctx:               ctx,
+		cancel:            cancel,
+		discoveryInterval: defaultDiscoveryInterval,
+		activeStreams:     make(map[string]activeStream),
+		seenStreams:       make(map[string]struct{}),
 	}
+	collector.podSource = collector.getPods
+	collector.streamLogs = collector.streamContainerLogs
+	return collector
 }
 
 // Start begins collecting logs from all specified namespaces.
 func (c *Collector) Start() error {
+	c.refreshPods()
+
+	c.wg.Add(1)
+	go c.discoveryLoop()
+	return nil
+}
+
+func (c *Collector) discoveryLoop() {
+	defer logger.RecoverAndLog("k8s.discoveryLoop")
+	defer c.wg.Done()
+
+	ticker := time.NewTicker(c.discoveryInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			c.refreshPods()
+		}
+	}
+}
+
+func (c *Collector) refreshPods() {
 	for _, ns := range c.namespaces {
-		pods, err := c.getPods(ns)
+		pods, err := c.podSource(ns)
 		if err != nil {
 			logger.Warn("failed to get pods", "namespace", ns, "error", err)
 			continue
 		}
+		c.reconcileNamespace(ns, pods)
+	}
+}
 
-		for _, pod := range pods {
-			if pod.Status != "Running" {
-				continue
-			}
+func (c *Collector) reconcileNamespace(namespace string, pods []Pod) {
+	type target struct {
+		pod       Pod
+		container string
+	}
 
-			// Apply pod filter if specified
-			if len(c.podFilter) > 0 {
-				matched := false
-				for _, filter := range c.podFilter {
-					if strings.Contains(pod.Name, filter) || strings.Contains(pod.Service, filter) {
-						matched = true
-						break
-					}
-				}
-				if !matched {
-					continue
-				}
-			}
-
-			c.wg.Add(1)
-			go c.streamPodLogs(pod)
+	desired := make(map[string]target)
+	for _, pod := range pods {
+		if pod.Status != "Running" || !c.matchesPodFilter(pod) {
+			continue
+		}
+		for _, container := range pod.Containers {
+			key := podStreamKey(pod, container)
+			desired[key] = target{pod: pod, container: container}
 		}
 	}
 
-	return nil
+	c.streamMu.Lock()
+	defer c.streamMu.Unlock()
+
+	if c.stopping {
+		return
+	}
+
+	for key, stream := range c.activeStreams {
+		if stream.namespace == namespace {
+			if _, ok := desired[key]; !ok {
+				stream.cancel()
+			}
+		}
+	}
+
+	for key, target := range desired {
+		if _, ok := c.activeStreams[key]; ok {
+			continue
+		}
+
+		_, restart := c.seenStreams[key]
+		c.seenStreams[key] = struct{}{}
+		streamCtx, cancel := context.WithCancel(c.ctx)
+		c.activeStreams[key] = activeStream{namespace: namespace, cancel: cancel}
+		c.wg.Add(1)
+		go c.runStream(key, target.pod, target.container, restart, streamCtx)
+	}
+}
+
+func (c *Collector) matchesPodFilter(pod Pod) bool {
+	if len(c.podFilter) == 0 {
+		return true
+	}
+	for _, filter := range c.podFilter {
+		if strings.Contains(pod.Name, filter) || strings.Contains(pod.Service, filter) {
+			return true
+		}
+	}
+	return false
+}
+
+func podStreamKey(pod Pod, container string) string {
+	podIdentity := pod.UID
+	if podIdentity == "" {
+		podIdentity = pod.Name
+	}
+	return pod.Namespace + "/" + podIdentity + "/" + container
+}
+
+func (c *Collector) runStream(key string, pod Pod, container string, restart bool, ctx context.Context) {
+	defer logger.RecoverAndLog("k8s.runStream")
+	defer c.wg.Done()
+	defer func() {
+		c.streamMu.Lock()
+		delete(c.activeStreams, key)
+		c.streamMu.Unlock()
+	}()
+
+	c.streamLogs(ctx, pod, container, restart)
 }
 
 // Stop stops all log streaming.
 func (c *Collector) Stop() {
-	c.cancel()
+	c.stopOnce.Do(func() {
+		c.cancel()
 
-	// Kill all running kubectl processes immediately
-	c.procMu.Lock()
-	for _, cmd := range c.processes {
-		if cmd.Process != nil {
-			cmd.Process.Kill()
+		c.streamMu.Lock()
+		c.stopping = true
+		for _, stream := range c.activeStreams {
+			stream.cancel()
 		}
-	}
-	c.procMu.Unlock()
+		c.streamMu.Unlock()
+	})
 
 	c.wg.Wait()
 }
@@ -122,12 +222,22 @@ func (c *Collector) getPods(namespace string) ([]Pod, error) {
 		return nil, err
 	}
 
+	return parsePods(output)
+}
+
+func parsePods(output []byte) ([]Pod, error) {
 	var result struct {
 		Items []struct {
 			Metadata struct {
 				Name      string `json:"name"`
 				Namespace string `json:"namespace"`
+				UID       string `json:"uid"`
 			} `json:"metadata"`
+			Spec struct {
+				Containers []struct {
+					Name string `json:"name"`
+				} `json:"containers"`
+			} `json:"spec"`
 			Status struct {
 				Phase string `json:"phase"`
 			} `json:"status"`
@@ -140,11 +250,17 @@ func (c *Collector) getPods(namespace string) ([]Pod, error) {
 
 	var pods []Pod
 	for _, item := range result.Items {
+		containers := make([]string, 0, len(item.Spec.Containers))
+		for _, container := range item.Spec.Containers {
+			containers = append(containers, container.Name)
+		}
 		pods = append(pods, Pod{
-			Name:      item.Metadata.Name,
-			Service:   extractServiceName(item.Metadata.Name),
-			Namespace: item.Metadata.Namespace,
-			Status:    item.Status.Phase,
+			Name:       item.Metadata.Name,
+			UID:        item.Metadata.UID,
+			Service:    extractServiceName(item.Metadata.Name),
+			Namespace:  item.Metadata.Namespace,
+			Status:     item.Status.Phase,
+			Containers: containers,
 		})
 	}
 
@@ -155,16 +271,18 @@ func (c *Collector) getPods(namespace string) ([]Pod, error) {
 type logBuffer struct {
 	entry     *protocol.LogEntry
 	pod       Pod
+	container string
 	timer     *time.Timer
 	mu        sync.Mutex
 	storage   *server.Storage
 	flushTime time.Duration
 }
 
-func newLogBuffer(storage *server.Storage, pod Pod, flushTime time.Duration) *logBuffer {
+func newLogBuffer(storage *server.Storage, pod Pod, container string, flushTime time.Duration) *logBuffer {
 	return &logBuffer{
 		storage:   storage,
 		pod:       pod,
+		container: container,
 		flushTime: flushTime,
 	}
 }
@@ -179,7 +297,10 @@ func (b *logBuffer) start(line string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	extraJSON, _ := json.Marshal(map[string]interface{}{"pod": b.pod.Name})
+	extraJSON, _ := json.Marshal(map[string]interface{}{
+		"pod":       b.pod.Name,
+		"container": b.container,
+	})
 	b.entry = &protocol.LogEntry{
 		Timestamp: time.Now(),
 		Namespace: b.pod.Namespace,
@@ -289,40 +410,33 @@ func shouldSkipLog(message string) bool {
 	return false
 }
 
-func (c *Collector) streamPodLogs(pod Pod) {
-	defer logger.RecoverAndLog("k8s.streamPodLogs")
-	defer c.wg.Done()
+func (c *Collector) streamContainerLogs(ctx context.Context, pod Pod, container string, restart bool) {
+	logger.Info("streaming logs", "namespace", pod.Namespace, "pod", pod.Name, "container", container)
 
-	logger.Info("streaming logs", "namespace", pod.Namespace, "pod", pod.Name)
-
-	cmd := exec.CommandContext(c.ctx, "kubectl", "logs", "-f", "--tail=100", "-n", pod.Namespace, pod.Name)
+	cmd := exec.CommandContext(ctx, "kubectl", kubectlLogArgs(pod, container, restart)...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		logger.Error("failed to get stdout", "pod", pod.Name, "error", err)
+		logger.Error("failed to get stdout", "pod", pod.Name, "container", container, "error", err)
 		return
 	}
 
 	if err := cmd.Start(); err != nil {
-		logger.Error("failed to start kubectl logs", "pod", pod.Name, "error", err)
+		logger.Error("failed to start kubectl logs", "pod", pod.Name, "container", container, "error", err)
 		return
 	}
-
-	// Track process for cleanup
-	c.procMu.Lock()
-	c.processes = append(c.processes, cmd)
-	c.procMu.Unlock()
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 
 	// Buffer for multiline log aggregation (stack traces)
-	buffer := newLogBuffer(c.storage, pod, 500*time.Millisecond)
+	buffer := newLogBuffer(c.storage, pod, container, 500*time.Millisecond)
 	defer buffer.flush()
 
+scanLoop:
 	for scanner.Scan() {
 		select {
-		case <-c.ctx.Done():
-			return
+		case <-ctx.Done():
+			break scanLoop
 		default:
 		}
 
@@ -347,7 +461,20 @@ func (c *Collector) streamPodLogs(pod Pod) {
 		buffer.resetTimer()
 	}
 
-	cmd.Wait()
+	if err := scanner.Err(); err != nil && ctx.Err() == nil {
+		logger.Warn("log stream ended with read error", "pod", pod.Name, "container", container, "error", err)
+	}
+	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
+		logger.Warn("kubectl logs exited", "pod", pod.Name, "container", container, "error", err)
+	}
+}
+
+func kubectlLogArgs(pod Pod, container string, restart bool) []string {
+	tail := "100"
+	if restart {
+		tail = "0"
+	}
+	return []string{"logs", "-f", "--tail=" + tail, "-n", pod.Namespace, pod.Name, "-c", container}
 }
 
 // extractServiceName extracts service name from pod name.

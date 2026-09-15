@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.0] - 2026-09-16
+
+### Added
+- **Dynamic Kubernetes discovery** — newly created and recreated pods are discovered without restarting Logpipe
+- **Multi-container collection** — each regular container gets its own `kubectl logs` stream, with pod and container metadata stored on every entry
+- **Configuration command** — `logpipe config init` creates a safe XDG-compatible default configuration
+- **Continuous integration** — formatting, race tests, vet, and production builds run on pushes and pull requests
+
+### Changed
+- **Safer TCP default** — the optional JSON ingestion endpoint now binds to `127.0.0.1` unless explicitly configured otherwise
+- **Native release builds** — Linux and macOS binaries are built on native amd64 and arm64 runners and published with SHA-256 checksums
+- **Project identity and documentation** — corrected module paths, repository links, setup instructions, architecture, and current limitations
+
+### Fixed
+- **Graceful shutdown** — active TCP and Unix socket connections are closed so shutdown cannot hang on idle clients
+- **Stream lifecycle** — streams for removed pods are cancelled, while unexpected reconnects avoid replaying the initial log history
+
+### Removed
+- **Python SDK and Kubernetes forwarder** — removed the abandoned SDK prototype to keep the project focused on the Go/Kubernetes workflow
+
 ## [0.1.2] - 2026-03-10
 
 ### Fixed

@@ -19,6 +19,7 @@ type Config struct {
 }
 
 type ServerConfig struct {
+	Host      string `yaml:"host"`
 	Port      int    `yaml:"port"`
 	DataDir   string `yaml:"data_dir"`
 	Retention string `yaml:"retention"`
@@ -65,6 +66,7 @@ func XDGStateHome() string {
 func Default() *Config {
 	return &Config{
 		Server: ServerConfig{
+			Host:            "127.0.0.1",
 			Port:            5555,
 			DataDir:         filepath.Join(xdgDataHome(), "logpipe"),
 			Retention:       "7d",
@@ -105,6 +107,10 @@ func Load() (*Config, error) {
 	}
 
 	// Expand ~ in data_dir
+	if cfg.Server.Host == "" {
+		cfg.Server.Host = Default().Server.Host
+	}
+
 	if cfg.Server.DataDir == "" {
 		cfg.Server.DataDir = Default().Server.DataDir
 	} else if cfg.Server.DataDir[0] == '~' {
@@ -194,6 +200,9 @@ func CreateDefaultConfig() error {
 # Location: %s
 
 server:
+  # Bind to loopback by default. Set explicitly only for trusted networks.
+  host: 127.0.0.1
+
   # TCP port for log collection
   port: 5555
 

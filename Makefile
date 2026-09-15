@@ -13,6 +13,7 @@ export CGO_CFLAGS = -DSQLITE_ENABLE_FTS5
 # Build
 build:
 	@echo "Building $(BINARY_NAME)..."
+	@mkdir -p $(BUILD_DIR)
 	CGO_ENABLED=1 go build -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/logpipe
 	@echo "Done: $(BUILD_DIR)/$(BINARY_NAME)"
 
@@ -64,20 +65,12 @@ uninstall: uninstall-service
 	-rm -f $(PREFIX)/bin/$(BINARY_NAME)
 	@echo "Done"
 
-# Install Python SDK
-install-python:
-	@echo "Installing Python SDK..."
-	cd python && pip install -e .
-	@echo "Done"
-
-# Build release binaries for all platforms
+# Build a release binary for the current platform. The release workflow runs
+# this target on native Linux and macOS runners because the SQLite driver uses CGO.
 release:
 	@echo "Building release binaries..."
 	@mkdir -p $(BUILD_DIR)/release
-	CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o $(BUILD_DIR)/release/$(BINARY_NAME)-darwin-arm64 ./cmd/logpipe
-	CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o $(BUILD_DIR)/release/$(BINARY_NAME)-darwin-amd64 ./cmd/logpipe
-	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o $(BUILD_DIR)/release/$(BINARY_NAME)-linux-amd64 ./cmd/logpipe
-	CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o $(BUILD_DIR)/release/$(BINARY_NAME)-linux-arm64 ./cmd/logpipe
+	CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o $(BUILD_DIR)/release/$(BINARY_NAME)-$(shell go env GOOS)-$(shell go env GOARCH) ./cmd/logpipe
 	@echo "Done. Binaries in $(BUILD_DIR)/release/"
 	@ls -lh $(BUILD_DIR)/release/
 
@@ -127,7 +120,6 @@ help:
 	@echo "  make install         Install binary to $(PREFIX)/bin"
 	@echo "  make install-service Install as system service (launchd/systemd)"
 	@echo "  make uninstall       Uninstall binary and service"
-	@echo "  make install-python  Install Python SDK"
 	@echo "  make run             Run server in foreground"
 	@echo "  make tui             Launch TUI"
 	@echo "  make logs            Tail logs"

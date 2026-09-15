@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/logpipe/logpipe/internal/logger"
-	"github.com/logpipe/logpipe/internal/protocol"
+	"github.com/fenrisis/logpipe/internal/logger"
+	"github.com/fenrisis/logpipe/internal/protocol"
 	_ "github.com/mattn/go-sqlite3"
 )
 
