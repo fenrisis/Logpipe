@@ -136,6 +136,14 @@ func (s *Storage) Query(filter protocol.Filter) ([]protocol.LogEntry, error) {
 		query += " AND service = ?"
 		args = append(args, filter.Service)
 	}
+	if filter.Pod != "" {
+		query += " AND " + podExpression + " = ?"
+		args = append(args, filter.Pod)
+	}
+	if filter.Container != "" {
+		query += " AND " + containerExpression + " = ?"
+		args = append(args, filter.Container)
+	}
 	if len(filter.Levels) > 0 {
 		query += " AND level IN (?" + repeatString(",?", len(filter.Levels)-1) + ")"
 		for _, l := range filter.Levels {
@@ -231,11 +239,44 @@ func (s *Storage) GetNamespaces() ([]protocol.Namespace, error) {
 			return nil, err
 		}
 		ns.Services = services
+		ns.Pods, err = s.getPods(ns.Name)
+		if err != nil {
+			return nil, err
+		}
 
 		namespaces = append(namespaces, ns)
 	}
 
 	return namespaces, nil
+}
+
+// Existing databases already store Kubernetes source identities in extra.
+// Guard JSON extraction for old entries with empty or malformed metadata.
+const podExpression = `CASE WHEN json_valid(extra) THEN json_extract(extra, '$.pod') END`
+const containerExpression = `CASE WHEN json_valid(extra) THEN json_extract(extra, '$.container') END`
+
+func (s *Storage) getPods(namespace string) ([]protocol.Pod, error) {
+	rows, err := s.db.Query(`SELECT DISTINCT `+podExpression+`, COALESCE(`+containerExpression+`, '')
+		FROM logs WHERE namespace = ? AND `+podExpression+` IS NOT NULL
+		AND `+podExpression+` != '' ORDER BY 1, 2`, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pods: %w", err)
+	}
+	defer rows.Close()
+	var pods []protocol.Pod
+	for rows.Next() {
+		var name, container string
+		if err := rows.Scan(&name, &container); err != nil {
+			return nil, err
+		}
+		if len(pods) == 0 || pods[len(pods)-1].Name != name {
+			pods = append(pods, protocol.Pod{Name: name})
+		}
+		if container != "" {
+			pods[len(pods)-1].Containers = append(pods[len(pods)-1].Containers, container)
+		}
+	}
+	return pods, rows.Err()
 }
 
 func (s *Storage) getServices(namespace string) ([]string, error) {

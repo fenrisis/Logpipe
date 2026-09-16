@@ -31,11 +31,11 @@ var keys = keyMap{
 	),
 	Left: key.NewBinding(
 		key.WithKeys("left", "h"),
-		key.WithHelp("←/h", "left"),
+		key.WithHelp("←/h", "parent"),
 	),
 	Right: key.NewBinding(
 		key.WithKeys("right", "l"),
-		key.WithHelp("→/l", "right"),
+		key.WithHelp("→/l", "open"),
 	),
 	Enter: key.NewBinding(
 		key.WithKeys("enter"),
@@ -84,7 +84,7 @@ var keys = keyMap{
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Tab, k.Search, k.Levels, k.Follow, k.Clear, k.Quit}
+	return []key.Binding{k.Up, k.Down, k.Enter, k.Left, k.Tab, k.Search, k.Levels, k.Follow, k.Clear, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **Pod and container navigation** — the sidebar now lists individual pods and containers, with immediate source filtering and parent navigation.
+- **Stable selection** — source selection survives discovery refreshes; delayed responses for another source no longer overwrite the selected logs.
+
 ## [0.2.0] - 2026-09-16
 
 ### Added

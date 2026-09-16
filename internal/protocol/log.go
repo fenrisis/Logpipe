@@ -32,14 +32,23 @@ type LogEntry struct {
 type Namespace struct {
 	Name       string   `json:"name"`
 	Services   []string `json:"services"`
+	Pods       []Pod    `json:"pods,omitempty"`
 	LogCount   int64    `json:"log_count"`
 	ErrorCount int64    `json:"error_count"`
+}
+
+// Pod describes log sources present in local storage, including historical pods.
+type Pod struct {
+	Name       string   `json:"name"`
+	Containers []string `json:"containers,omitempty"`
 }
 
 // Filter for querying logs
 type Filter struct {
 	Namespace string     `json:"namespace,omitempty"`
 	Service   string     `json:"service,omitempty"`
+	Pod       string     `json:"pod,omitempty"`
+	Container string     `json:"container,omitempty"`
 	Levels    []LogLevel `json:"levels,omitempty"`
 	Search    string     `json:"search,omitempty"`
 	From      time.Time  `json:"from,omitempty"`

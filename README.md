@@ -72,7 +72,8 @@ Main controls:
 | Key | Action |
 | --- | --- |
 | `↑` / `↓`, `j` / `k` | Move selection |
-| `Enter` | Expand a namespace or open the selected log entry |
+| `Enter` / `→` / `l` | Open a namespace or pod and select its first child (`Enter` opens log details in the log panel) |
+| `←` / `h` / `Esc` | Return to the parent source; collapse when already on a namespace |
 | `Tab` | Change panel |
 | `/` | Search logs |
 | `f` | Pause or resume the one-second UI refresh |
@@ -80,6 +81,8 @@ Main controls:
 | `q` | Quit |
 
 Run `logpipe k8s --help` for all collection and storage options.
+
+The sidebar shows namespace → pod → container. Move with `↑`/`↓` or `j`/`k` to filter the log panel immediately. Selecting a namespace shows all its pods; selecting a pod shows all its containers. Pod and container names come from stored log metadata, so existing logs work without reimporting. Sources with no collected logs are not listed, and historical pods remain available while their logs are retained.
 
 Logpipe does not store Kubernetes credentials or implement a separate login flow. Every cluster operation is executed through the local `kubectl` command and therefore uses its selected context, kubeconfig, authentication provider, and Kubernetes RBAC permissions.
 

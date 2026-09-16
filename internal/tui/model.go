@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/fenrisis/logpipe/internal/client"
 	"github.com/fenrisis/logpipe/internal/protocol"
 )
@@ -28,24 +31,24 @@ type Model struct {
 	stats      protocol.Stats
 
 	// UI State
-	focus        Focus
-	nsSelected   int
-	svcSelected  int
-	logSelected  int
-	logOffset    int
-	showServices bool
-	streaming    bool
-	searchActive bool
-	searchInput  textinput.Model
-	searchQuery  string
-	lastLogID    int64
-	err          error
-	filterError  bool               // Show ERROR level
-	filterWarn   bool               // Show WARN level
-	filterInfo   bool               // Show INFO level
-	filterDebug  bool               // Show DEBUG level
-	showDetail   bool               // Show log detail modal
-	detailLog    *protocol.LogEntry // Currently viewed log
+	focus               Focus
+	selectedSource      logSource
+	collapsedNamespaces map[string]bool
+	expandedPods        map[logSource]bool
+	logSelected         int
+	logOffset           int
+	streaming           bool
+	searchActive        bool
+	searchInput         textinput.Model
+	searchQuery         string
+	lastLogID           int64
+	err                 error
+	filterError         bool               // Show ERROR level
+	filterWarn          bool               // Show WARN level
+	filterInfo          bool               // Show INFO level
+	filterDebug         bool               // Show DEBUG level
+	showDetail          bool               // Show log detail modal
+	detailLog           *protocol.LogEntry // Currently viewed log
 
 	// Dimensions
 	width  int
@@ -58,7 +61,10 @@ type Model struct {
 
 // Messages
 type tickMsg time.Time
-type logsMsg []protocol.LogEntry
+type logsMsg struct {
+	filter  protocol.Filter
+	entries []protocol.LogEntry
+}
 type namespacesMsg []protocol.Namespace
 type statsMsg protocol.Stats
 type errMsg error
@@ -136,15 +142,10 @@ func (m Model) buildFilter() protocol.Filter {
 		Limit: 100,
 	}
 
-	if len(m.namespaces) > 0 && m.nsSelected < len(m.namespaces) {
-		filter.Namespace = m.namespaces[m.nsSelected].Name
-
-		if m.showServices && len(m.namespaces[m.nsSelected].Services) > 0 {
-			if m.svcSelected < len(m.namespaces[m.nsSelected].Services) {
-				filter.Service = m.namespaces[m.nsSelected].Services[m.svcSelected]
-			}
-		}
-	}
+	filter.Namespace = m.selectedSource.namespace
+	filter.Pod = m.selectedSource.pod
+	filter.Container = m.selectedSource.container
+	filter.Service = m.selectedSource.service
 
 	if m.searchQuery != "" {
 		filter.Search = m.searchQuery
@@ -289,13 +290,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case msg.String() == "enter":
 			if m.focus == FocusNamespaces {
-				m.showServices = !m.showServices
+				m.enterSource()
+				return m, m.fetchLogsCmd()
 			} else if m.focus == FocusLogs && len(m.logs) > 0 {
 				// Show log detail
 				if m.logSelected < len(m.logs) {
 					m.detailLog = &m.logs[m.logSelected]
 					m.showDetail = true
 				}
+			}
+
+		case msg.String() == "right" || msg.String() == "l":
+			if m.focus == FocusNamespaces {
+				m.enterSource()
+				return m, m.fetchLogsCmd()
+			}
+
+		case msg.String() == "left" || msg.String() == "h" || msg.String() == "esc":
+			if m.focus == FocusNamespaces {
+				m.leaveSource()
+				return m, m.fetchLogsCmd()
 			}
 
 		case msg.String() == "pgdown" || msg.String() == "ctrl+d":
@@ -317,11 +331,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case namespacesMsg:
 		m.namespaces = msg
+		if m.restoreSourceSelection() {
+			return m, m.fetchLogsCmd()
+		}
 
 	case logsMsg:
-		m.logs = msg
-		if len(msg) > 0 {
-			m.lastLogID = msg[0].ID
+		// A response for the previous source may arrive after navigation.
+		if !reflect.DeepEqual(msg.filter, m.buildFilter()) {
+			return m, nil
+		}
+		m.logs = msg.entries
+		m.logSelected = min(m.logSelected, max(0, len(m.logs)-1))
+		if len(m.logs) > 0 {
+			m.lastLogID = m.logs[0].ID
 		}
 
 	case statsMsg:
@@ -346,18 +368,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleDown() {
 	if m.focus == FocusNamespaces {
-		if m.showServices && len(m.namespaces) > 0 {
-			services := m.namespaces[m.nsSelected].Services
-			if m.svcSelected < len(services)-1 {
-				m.svcSelected++
-			} else if m.nsSelected < len(m.namespaces)-1 {
-				m.nsSelected++
-				m.svcSelected = 0
-			}
-		} else if m.nsSelected < len(m.namespaces)-1 {
-			m.nsSelected++
-			m.svcSelected = 0
-		}
+		m.moveSource(1)
 	} else if m.focus == FocusLogs {
 		// Move cursor down
 		if m.logSelected < len(m.logs)-1 {
@@ -368,14 +379,7 @@ func (m *Model) handleDown() {
 
 func (m *Model) handleUp() {
 	if m.focus == FocusNamespaces {
-		if m.showServices && m.svcSelected > 0 {
-			m.svcSelected--
-		} else if m.nsSelected > 0 {
-			m.nsSelected--
-			if m.showServices && len(m.namespaces[m.nsSelected].Services) > 0 {
-				m.svcSelected = len(m.namespaces[m.nsSelected].Services) - 1
-			}
-		}
+		m.moveSource(-1)
 	} else if m.focus == FocusLogs {
 		// Move cursor up
 		if m.logSelected > 0 {
@@ -385,16 +389,16 @@ func (m *Model) handleUp() {
 }
 
 func (m Model) fetchLogsCmd() tea.Cmd {
+	filter := m.buildFilter()
 	return func() tea.Msg {
-		if m.client == nil {
+		if m.client == nil || filter.Namespace == "" {
 			return nil
 		}
-		filter := m.buildFilter()
 		logs, err := m.client.GetLogs(filter)
 		if err != nil {
 			return errMsg(err)
 		}
-		return logsMsg(logs)
+		return logsMsg{filter: filter, entries: logs}
 	}
 }
 
@@ -419,8 +423,8 @@ func (m Model) View() string {
 	}
 
 	// Layout: sidebar (namespaces) | main (logs)
-	sidebarWidth := 25
-	mainWidth := m.width - sidebarWidth - 3
+	sidebarWidth := min(48, max(25, m.width/3))
+	mainWidth := m.width - sidebarWidth - 4 // two bordered panels
 
 	sidebar := m.renderSidebar(sidebarWidth, m.height-4)
 	main := m.renderLogs(mainWidth, m.height-4)
@@ -512,45 +516,7 @@ func (m Model) renderDetailView() string {
 }
 
 func (m Model) renderSidebar(width, height int) string {
-	var sb strings.Builder
-
-	sb.WriteString(titleStyle.Render("NAMESPACES"))
-	sb.WriteString("\n\n")
-
-	for i, ns := range m.namespaces {
-		line := ns.Name
-		if ns.ErrorCount > 0 {
-			line += fmt.Sprintf(" (%d err)", ns.ErrorCount)
-		}
-
-		style := normalStyle
-		if i == m.nsSelected && m.focus == FocusNamespaces && !m.showServices {
-			style = selectedStyle
-		}
-
-		if i == m.nsSelected {
-			sb.WriteString("▸ ")
-		} else {
-			sb.WriteString("  ")
-		}
-		sb.WriteString(style.Render(line))
-		sb.WriteString("\n")
-
-		// Show services if expanded
-		if i == m.nsSelected && m.showServices {
-			for j, svc := range ns.Services {
-				svcStyle := dimStyle
-				if j == m.svcSelected && m.focus == FocusNamespaces {
-					svcStyle = selectedStyle
-				}
-				sb.WriteString("    ")
-				sb.WriteString(svcStyle.Render("└─ " + svc))
-				sb.WriteString("\n")
-			}
-		}
-	}
-
-	return sb.String()
+	return m.renderSourceTree(width, height)
 }
 
 func (m Model) renderLogs(width, height int) string {
@@ -558,6 +524,9 @@ func (m Model) renderLogs(width, height int) string {
 
 	// Header
 	header := titleStyle.Render("LOGS")
+	if m.selectedSource.namespace != "" {
+		header += " " + dimStyle.Render(m.selectedSource.label())
+	}
 
 	// Show active level filters
 	if m.filterError || m.filterWarn || m.filterInfo || m.filterDebug {
@@ -582,7 +551,7 @@ func (m Model) renderLogs(width, height int) string {
 	if m.streaming {
 		header += infoStyle.Render(" ● streaming")
 	}
-	sb.WriteString(header)
+	sb.WriteString(ansi.Truncate(header, max(1, width-2), "…"))
 	sb.WriteString("\n\n")
 
 	// Search input
@@ -620,11 +589,19 @@ func (m Model) renderLogs(width, height int) string {
 		ts := logEntry.Timestamp.Format("15:04:05")
 		level := fmt.Sprintf("%-5s", logEntry.Level)
 
-		// Truncate or pad service name to fixed width
+		// Identify the actual container in multi-container pod views.
 		source := logEntry.Service
-		if len(source) > sourceWidth {
-			source = source[:sourceWidth-1] + "…"
+		var metadata struct {
+			Pod       string `json:"pod"`
+			Container string `json:"container"`
 		}
+		if json.Unmarshal(logEntry.Extra, &metadata) == nil && metadata.Pod != "" {
+			source = metadata.Pod
+			if m.selectedSource.pod != "" && metadata.Container != "" {
+				source = metadata.Container
+			}
+		}
+		source = ansi.Truncate(source, sourceWidth, "…")
 		source = fmt.Sprintf("%-*s", sourceWidth, source)
 
 		levelStyle := getLevelStyle(string(logEntry.Level))
@@ -644,9 +621,7 @@ func (m Model) renderLogs(width, height int) string {
 		)
 
 		// Truncate if too long
-		if len(line) > width-4 {
-			line = line[:width-7] + "..."
-		}
+		line = ansi.Truncate(line, max(1, width-4), "…")
 
 		// Highlight selected row
 		if i == m.logSelected && m.focus == FocusLogs {
@@ -663,13 +638,8 @@ func (m Model) renderLogs(width, height int) string {
 func (m Model) renderStatusBar() string {
 	var parts []string
 
-	if len(m.namespaces) > 0 && m.nsSelected < len(m.namespaces) {
-		ns := m.namespaces[m.nsSelected]
-		loc := ns.Name
-		if m.showServices && m.svcSelected < len(ns.Services) {
-			loc += "/" + ns.Services[m.svcSelected]
-		}
-		parts = append(parts, loc)
+	if m.selectedSource.namespace != "" {
+		parts = append(parts, m.selectedSource.label())
 	}
 
 	parts = append(parts, fmt.Sprintf("%d logs", len(m.logs)))
@@ -679,5 +649,5 @@ func (m Model) renderStatusBar() string {
 		parts = append(parts, errorStyle.Render(fmt.Sprintf("%d errors today", m.stats.TodayErrors)))
 	}
 
-	return statusBarStyle.Width(m.width).Render(strings.Join(parts, " │ "))
+	return statusBarStyle.Width(m.width).Render(ansi.Truncate(strings.Join(parts, " │ "), max(1, m.width-2), "…"))
 }
