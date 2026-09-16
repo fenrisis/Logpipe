@@ -58,13 +58,13 @@ make build
 
 ```bash
 # Collect from one namespace using the current kubectl context.
-./bin/logpipe k8s --namespace production
+./bin/logpipe k8s  -n namespace production
 
 # Restrict collection to selected namespaces.
-./bin/logpipe k8s --namespace production --namespace staging
+./bin/logpipe k8s  -n  production --namespace staging
 
 # Restrict collection to pods whose names contain a substring.
-./bin/logpipe k8s --namespace production --pod gateway
+./bin/logpipe k8s  -n  production --pod gateway
 ```
 
 Main controls:
